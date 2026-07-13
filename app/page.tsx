@@ -1,65 +1,197 @@
-import Image from "next/image";
+"use client";
+import React, { useCallback, useRef } from "react";
+import { Toolbar } from "@/components/Toolbar";
+import { Viewport } from "@/components/Viewport";
+import { RightPanel } from "@/components/RightPanel";
+import { HistoryPanel } from "@/components/HistoryPanel";
+import { useEditorStore } from "@/lib/store/useEditorStore";
 
-export default function Home() {
+export default function BokehStudio() {
+  const { colorImage, history } = useEditorStore();
+  const showHistory = history.length > 1;
+
+  const handleExport = useCallback(async () => {
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement | null;
+    if (!canvas) return;
+    try {
+      const blob = await new Promise<Blob | null>((res) =>
+        canvas.toBlob(res, "image/jpeg", 0.95)
+      );
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bokeh-studio-export-${Date.now()}.jpg`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Fallback for WebGPU canvas (not always readable via toBlob)
+      const link = document.createElement("a");
+      link.download = "bokeh-studio-export.png";
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    }
+  }, []);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
+    <div className="app-shell">
+      <Toolbar onExport={handleExport} />
+
+      <div className="workspace">
+        {showHistory && <HistoryPanel />}
+        <Viewport />
+        <RightPanel />
+      </div>
+
+      {/* Drop overlay */}
+      <DropZone />
+
+      <style jsx>{`
+        .app-shell {
+          display: flex;
+          flex-direction: column;
+          height: 100vh;
+          background: #111;
+          overflow: hidden;
+        }
+        .workspace {
+          flex: 1;
+          display: flex;
+          overflow: hidden;
+          min-height: 0;
+        }
+      `}</style>
     </div>
   );
+}
+
+// Global drag-and-drop handler
+function DropZone() {
+  const [isDragging, setIsDragging] = React.useState(false);
+  const dragCount = useRef(0);
+  const { setColorImage, setDepthImage, setEngineStatus } = useEditorStore();
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCount.current++;
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCount.current--;
+    if (dragCount.current === 0) setIsDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCount.current = 0;
+    setIsDragging(false);
+
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+
+    const url = URL.createObjectURL(file);
+    const img = new window.Image();
+    img.onload = () => {
+      const MAX = 2048;
+      let w = img.width, h = img.height;
+      if (w > MAX || h > MAX) {
+        const ratio = Math.min(MAX / w, MAX / h);
+        w = Math.floor(w * ratio);
+        h = Math.floor(h * ratio);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, w, h);
+      const colorData = ctx.getImageData(0, 0, w, h);
+      URL.revokeObjectURL(url);
+
+      setColorImage(colorData, file.name);
+      setEngineStatus("rendering");
+
+      // Synthetic depth map
+      const depth = generateSyntheticDepth(colorData);
+      setDepthImage(depth);
+    };
+    img.src = url;
+  };
+
+  return (
+    <div
+      className={`drop-overlay ${isDragging ? "active" : ""}`}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {isDragging && (
+        <div className="drop-message">
+          <div className="drop-icon">⬢</div>
+          <div className="drop-text">Drop to open</div>
+        </div>
+      )}
+
+      <style jsx>{`
+        .drop-overlay {
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          z-index: 100;
+          transition: background 0.15s;
+        }
+        .drop-overlay.active {
+          pointer-events: all;
+          background: rgba(74, 158, 255, 0.12);
+          border: 3px solid rgba(74, 158, 255, 0.5);
+        }
+        .drop-message {
+          position: absolute;
+          inset: 0;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+        }
+        .drop-icon {
+          font-size: 64px;
+          opacity: 0.6;
+          color: #4a9eff;
+        }
+        .drop-text {
+          font-size: 24px;
+          font-weight: 600;
+          color: #4a9eff;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function generateSyntheticDepth(colorData: ImageData): ImageData {
+  const { width, height, data } = colorData;
+  const depth = new Uint8ClampedArray(width * height * 4);
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const nx = (x / width - 0.5) * 2;
+      const ny = (y / height - 0.5) * 2;
+      const radial = 1 - Math.sqrt(nx * nx + ny * ny) * 0.5;
+      const idx4 = (y * width + x) * 4;
+      const lum = (data[idx4] * 0.299 + data[idx4 + 1] * 0.587 + data[idx4 + 2] * 0.114) / 255;
+      const d = Math.max(0, Math.min(1, radial * 0.65 + (1 - lum) * 0.35));
+      const val = Math.round(d * 255);
+      depth[idx4] = val;
+      depth[idx4 + 1] = val;
+      depth[idx4 + 2] = val;
+      depth[idx4 + 3] = 255;
+    }
+  }
+  return new ImageData(depth, width, height);
 }
