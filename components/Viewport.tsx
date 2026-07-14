@@ -148,8 +148,14 @@ export function Viewport() {
     const retry = () => triggerRender();
 
     // ── WASM (Rust) engine ──────────────────────────────────────
+    // WASM only does circular disc blur — route shaped apertures to JS worker
     if (renderEngine === "wasm") {
-      renderWithWasm(canvas, colorImage, depthImage, params, paramsKey, retry);
+      const needsShape = params.apertureShape !== 0 || params.anamorphic > 1.1;
+      if (needsShape) {
+        renderWithJsWorker(canvas, colorImage, depthImage, params, paramsKey, retry);
+      } else {
+        renderWithWasm(canvas, colorImage, depthImage, params, paramsKey, retry);
+      }
       return;
     }
 
@@ -159,8 +165,14 @@ export function Viewport() {
       return;
     }
 
-    // ── BokehMe AI server (circle only, falls back to WASM) ────
+    // ── BokehMe AI server (circle only, falls back to JS worker for shapes) ────
     const t0 = Date.now();
+    const needsShape = params.apertureShape !== 0 || params.anamorphic > 1.1;
+    if (needsShape) {
+      // BokehMe can't do shaped apertures — always use JS worker for shapes
+      renderWithJsWorker(canvas, colorImage, depthImage, params, paramsKey, retry);
+      return;
+    }
     try {
       const result = await renderBokeh(colorImage, depthImage, {
         K:          params.aperture * 0.8,
