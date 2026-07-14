@@ -54,13 +54,47 @@ export class Canvas2DFallback {
           continue;
         }
 
-        // Box blur approximation (fast, not as pretty)
         const r = Math.round(coc * 0.5);
         let rSum = 0, gSum = 0, bSum = 0, count = 0;
-        const step = Math.max(1, Math.floor(r / 4)); // skip pixels for speed
+        const step = Math.max(1, Math.floor(r / 4));
+        const rot = (params.bladeRotation * Math.PI) / 180;
+        const blades = params.apertureShape;
+        const anamorphic = params.anamorphic ?? 1.0;
 
         for (let dy = -r; dy <= r; dy += step) {
           for (let dx = -r; dx <= r; dx += step) {
+            // Normalise sample point to unit disk space
+            const px = (dx / r) / anamorphic;
+            const py = dy / r;
+            const pr = Math.sqrt(px * px + py * py);
+
+            // Aperture shape test
+            let inside = false;
+            if (blades < 3) {
+              // Circle
+              inside = pr <= 1.0;
+            } else if (blades >= 10) {
+              // Star (5-point)
+              const angle = Math.atan2(py, px) + rot;
+              const sector = (Math.PI * 2) / 10;
+              const localAngle = ((angle % sector) + sector) % sector;
+              const halfSector = sector * 0.5;
+              const t = Math.abs(localAngle - halfSector) / halfSector;
+              const starRadius = 0.45 + 0.55 * t;
+              inside = pr <= starRadius;
+            } else {
+              // Regular polygon (pentagon=5, hex=6, octagon=8)
+              const angle = Math.atan2(py, px) + rot;
+              const sector = (Math.PI * 2) / blades;
+              const localAngle = ((angle % sector) + sector) % sector;
+              const delta = localAngle - sector * 0.5;
+              const apothem = Math.cos(Math.PI / blades);
+              const polyRadius = apothem / Math.cos(delta);
+              inside = pr <= polyRadius;
+            }
+
+            if (!inside) continue;
+
             const nx = Math.min(w - 1, Math.max(0, x + dx));
             const ny = Math.min(h - 1, Math.max(0, y + dy));
             const ni = (ny * w + nx) * 4;

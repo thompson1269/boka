@@ -115,23 +115,42 @@ const TAU = 6.28318530718;
 
 // Aperture shape: returns 1.0 if sample point is inside aperture
 fn insideAperture(p: vec2f) -> f32 {
+  let r = length(p);
+  if (r < 0.0001) { return 1.0; }
+
   let blades = params.bladeCount;
+
+  // ---- Circle (blades == 0) ----
   if (blades < 3.0) {
-    // Perfect circle
-    return select(0.0, 1.0, length(p) <= 1.0);
+    return select(0.0, 1.0, r <= 1.0);
   }
-  
-  // N-blade polygon aperture (realistic bokeh shape)
-  let angle = atan2(p.y, p.x) + params.bladeRotation;
+
+  // ---- Star (blades == 10 special-cased) ----
+  // Modelled as a 5-point star: outer radius 1.0, inner radius 0.45
+  if (blades >= 9.5 && blades <= 10.5) {
+    let angle = atan2(p.y, p.x) + params.bladeRotation;
+    let sector = TAU / 10.0;                       // 5 outer + 5 inner points
+    let localAngle = ((angle % sector) + sector) % sector;
+    let halfSector = sector * 0.5;
+    // interpolate between outer (1.0) and inner (0.45) radii
+    let t = abs(localAngle - halfSector) / halfSector; // 0 at inner tip, 1 at outer tip
+    let starRadius = mix(0.45, 1.0, t);
+    return select(0.0, 1.0, r <= starRadius);
+  }
+
+  // ---- Regular N-gon (pentagon=5, hex=6, octagon=8) ----
+  // Standard polygon containment: r <= cos(π/n) / cos(θ mod (2π/n) - π/n)
   let n = blades;
-  let sectorAngle = TAU / n;
-  let sectorIndex = floor((angle + PI) / sectorAngle);
-  let sectorMid = sectorIndex * sectorAngle - PI + sectorAngle * 0.5;
-  
-  // Inscribed polygon radius at this angle
-  let polyRadius = cos(PI / n) / cos(angle - sectorMid - floor((angle - sectorMid + PI) / sectorAngle) * sectorAngle);
-  
-  return select(0.0, 1.0, length(p) <= polyRadius);
+  let angle = atan2(p.y, p.x) + params.bladeRotation;
+  let sector = TAU / n;
+  // Map angle into [0, sector)
+  let localAngle = ((angle % sector) + sector) % sector;
+  // Distance from sector midline
+  let delta = localAngle - sector * 0.5;
+  // Polygon radius at this angle (apothem / cos(delta))
+  let apothem = cos(PI / n);
+  let polyRadius = apothem / cos(delta);
+  return select(0.0, 1.0, r <= polyRadius);
 }
 
 // Vogel disk sampling — perceptually uniform, no visible rings
