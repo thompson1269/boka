@@ -21,40 +21,29 @@ self.onmessage = async function (e) {
   const { rgba, depth, width, height, params, paramsKey } = e.data;
 
   try {
+    // Stage 1 — init
+    self.postMessage({ type: "progress", pct: 5, label: "Loading Rust engine…" });
     await initWasm();
 
-    const {
-      aperture,
-      focalDistance,
-      focalRange,
-      bokehBoost,
-    } = params;
-
-    // Map UI aperture (0-80px) → kernel radius
-    // The Rust crate works with actual pixel radii
-    const radius = Math.max(0.5, aperture * 0.4);
-
-    // gamma: 1.0 = neutral, bokehBoost shifts exposure on highlights
-    const gamma = Math.max(1.0, Math.min(3.0, 1.0 + bokehBoost * 0.3));
-
-    // Use 5 components — good quality/speed balance
-    // Higher = better disc approximation but slower
+    const { aperture, focalDistance, focalRange, bokehBoost } = params;
+    const radius     = Math.max(0.5, aperture * 0.4);
+    const gamma      = Math.max(1.0, Math.min(3.0, 1.0 + bokehBoost * 0.3));
     const components = aperture > 40 ? 7 : aperture > 20 ? 5 : 4;
 
+    // Stage 2 — convert + mask
+    self.postMessage({ type: "progress", pct: 20, label: "Building depth mask…" });
+
+    // Stage 3 — blur (the heavy step)
+    self.postMessage({ type: "progress", pct: 35, label: `Running ${components}-component Gaussian kernel…` });
+
     const out = applyBokeh(
-      rgba,
-      depth,
-      width,
-      height,
-      radius,
-      focalDistance,
-      focalRange,
-      gamma,
-      components
+      rgba, depth, width, height,
+      radius, focalDistance, focalRange, gamma, components
     );
 
-    // wasm-bindgen returns a JS Uint8Array backed by WASM memory.
-    // Copy it out before the WASM heap can move, then transfer the buffer.
+    // Stage 4 — done
+    self.postMessage({ type: "progress", pct: 95, label: "Compositing…" });
+
     const outCopy = new Uint8Array(out);
     self.postMessage({ type: "result", out: outCopy, paramsKey }, [outCopy.buffer]);
   } catch (err) {

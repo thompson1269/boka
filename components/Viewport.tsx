@@ -16,6 +16,7 @@ export function Viewport() {
   const {
     params, colorImage, depthImage,
     setEngineStatus, engineStatus,
+    setRenderProgress, renderProgress, renderLabel,
     viewMode, depthOverlayOpacity,
     isFocusPicking, setFocusFromDepth, setFocusPoint,
     isBrushActive, brushRadius, addBrushStroke,
@@ -81,7 +82,11 @@ export function Viewport() {
     const t0 = Date.now();
 
     worker.onmessage = (e: MessageEvent) => {
-      const { type, out, message } = e.data;
+      const { type, out, message, pct, label } = e.data;
+      if (type === "progress") {
+        setRenderProgress(pct, label);
+        return;
+      }
       if (type === "error") {
         console.warn("WASM worker error:", message, "— falling back to JS worker");
         renderWithJsWorker(canvas, color, depth, p, paramsKey, retry);
@@ -120,8 +125,12 @@ export function Viewport() {
     const t0 = Date.now();
 
     worker.onmessage = (e: MessageEvent) => {
-      const { out } = e.data as { out: Uint8ClampedArray };
-      drawResult(canvas, out, color.width, color.height, "🔧 JS Worker", t0, paramsKey, retry);
+      const { type, out, pct, label } = e.data as { type?: string; out?: Uint8ClampedArray; pct?: number; label?: string };
+      if (type === "progress") {
+        setRenderProgress(pct!, label!);
+        return;
+      }
+      drawResult(canvas, out!, color.width, color.height, "🔧 JS Worker", t0, paramsKey, retry);
     };
 
     const src = new Uint8ClampedArray(color.data);
@@ -151,8 +160,10 @@ export function Viewport() {
     if (renderEngine === "wasm") {
       const needsShape = params.apertureShape !== 0 || params.anamorphic > 1.1;
       if (needsShape) {
+        setRenderProgress(5, "Preparing shape kernel…");
         renderWithJsWorker(canvas, colorImage, depthImage, params, paramsKey, retry);
       } else {
+        setRenderProgress(5, "Loading Rust engine…");
         renderWithWasm(canvas, colorImage, depthImage, params, paramsKey, retry);
       }
       return;
@@ -160,6 +171,7 @@ export function Viewport() {
 
     // ── JS shape worker (all aperture shapes) ──────────────────
     if (renderEngine === "worker") {
+      setRenderProgress(5, "Preparing shape kernel…");
       renderWithJsWorker(canvas, colorImage, depthImage, params, paramsKey, retry);
       return;
     }
@@ -168,10 +180,11 @@ export function Viewport() {
     const t0 = Date.now();
     const needsShape = params.apertureShape !== 0 || params.anamorphic > 1.1;
     if (needsShape) {
-      // BokehMe can't do shaped apertures — always use JS worker for shapes
+      setRenderProgress(5, "Preparing shape kernel…");
       renderWithJsWorker(canvas, colorImage, depthImage, params, paramsKey, retry);
       return;
     }
+    setRenderProgress(10, "Sending to BokehMe server…");
     try {
       const result = await renderBokeh(colorImage, depthImage, {
         K:          params.aperture * 0.8,
@@ -179,6 +192,8 @@ export function Viewport() {
         gamma:      Math.max(1, Math.min(5, params.bokehBoost * 1.2 + 1)),
         highlight:  params.bokehBoost > 0.5,
       });
+
+      setRenderProgress(85, "Receiving result…");
 
       if (latestParamsRef.current !== paramsKey) {
         renderingRef.current = false;
@@ -409,17 +424,45 @@ export function Viewport() {
         </div>
       )}
 
-      {/* Rendering spinner */}
+      {/* Progress bar overlay */}
       {isRendering && (
         <div style={{
-          position:"absolute", top:12, right:12,
-          background:"rgba(0,0,0,0.75)", backdropFilter:"blur(6px)",
-          borderRadius:8, padding:"6px 12px", color:"var(--accent-bright)",
-          display:"flex", alignItems:"center", gap:7, fontSize:11,
-          border:"1px solid rgba(59,130,246,0.2)",
+          position: "absolute", bottom: 0, left: 0, right: 0,
+          padding: "10px 14px 12px",
+          background: "linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%)",
+          pointerEvents: "none",
         }}>
-          <div style={{ width:12, height:12, borderRadius:"50%", border:"2px solid var(--accent-bright)", borderTopColor:"transparent", animation:"spin 0.7s linear infinite" }} />
-          rendering…
+          {/* Label + percent */}
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            marginBottom: 6,
+          }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.75)", fontWeight: 500 }}>
+              {renderLabel || "Rendering…"}
+            </span>
+            <span style={{
+              fontSize: 11, fontVariantNumeric: "tabular-nums",
+              color: "var(--accent-bright)", fontWeight: 600,
+            }}>
+              {renderProgress}%
+            </span>
+          </div>
+
+          {/* Track */}
+          <div style={{
+            height: 3, borderRadius: 2,
+            background: "rgba(255,255,255,0.12)",
+            overflow: "hidden",
+          }}>
+            <div style={{
+              height: "100%",
+              width: `${renderProgress}%`,
+              borderRadius: 2,
+              background: "linear-gradient(90deg, var(--accent) 0%, var(--accent-bright) 100%)",
+              boxShadow: "0 0 8px var(--accent-glow)",
+              transition: "width 0.25s ease",
+            }} />
+          </div>
         </div>
       )}
 

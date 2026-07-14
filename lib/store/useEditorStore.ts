@@ -61,6 +61,7 @@ interface EditorState {
   viewMode:      ViewMode;
   engineStatus:  EngineStatus;
   renderProgress: number;
+  renderLabel:   string;
   isWebGPU:      boolean;
   renderEngine:  RenderEngine;
 
@@ -90,6 +91,7 @@ interface EditorState {
   setActiveTab:    (tab: PanelTab) => void;
   setViewMode:     (mode: ViewMode) => void;
   setEngineStatus: (status: EngineStatus, progress?: number) => void;
+  setRenderProgress: (pct: number, label: string) => void;
   setIsWebGPU:     (v: boolean) => void;
   setRenderEngine: (engine: RenderEngine) => void;
   setFocusPicking: (v: boolean) => void;
@@ -128,6 +130,7 @@ export const useEditorStore = create<EditorState>()(
     viewMode:      "result",
     engineStatus:  "idle",
     renderProgress: 0,
+    renderLabel:   "",
     isWebGPU:      false,
     renderEngine:  "wasm",
 
@@ -179,7 +182,8 @@ export const useEditorStore = create<EditorState>()(
 
     setActiveTab:    (activeTab) => set({ activeTab }),
     setViewMode:     (viewMode)  => set({ viewMode }),
-    setEngineStatus: (engineStatus, renderProgress = 0) => set({ engineStatus, renderProgress }),
+    setEngineStatus: (engineStatus, renderProgress = 0) => set({ engineStatus, renderProgress, renderLabel: "" }),
+    setRenderProgress: (pct, label) => set({ renderProgress: pct, renderLabel: label }),
     setIsWebGPU:     (isWebGPU) => set({ isWebGPU }),
     setRenderEngine: (renderEngine) => set({ renderEngine }),
 

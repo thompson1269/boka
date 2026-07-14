@@ -1,6 +1,7 @@
 // Bokeh shape-aware CPU renderer — runs off the main thread
 // Receives: { src, dep, width, height, params }
-// Posts back: { out } as Uint8ClampedArray
+// Posts back: { type: "progress", step, total, label } during work
+//             { type: "result", out } when done
 
 self.onmessage = function (e) {
   const { src, dep, width: w, height: h, params } = e.data;
@@ -19,7 +20,6 @@ self.onmessage = function (e) {
     if (r < 0.0001) return true;
     if (blades < 3) return r <= 1.0;
     if (blades >= 9.5 && blades <= 10.5) {
-      // 5-point star
       const angle  = Math.atan2(py, px) + rot;
       const sector = TAU / 10;
       const local  = ((angle % sector) + sector) % sector;
@@ -27,7 +27,6 @@ self.onmessage = function (e) {
       const t      = Math.abs(local - half) / half;
       return r <= (0.45 + 0.55 * t);
     }
-    // Regular N-gon
     const angle   = Math.atan2(py, px) + rot;
     const sector  = TAU / blades;
     const local   = ((angle % sector) + sector) % sector;
@@ -37,6 +36,7 @@ self.onmessage = function (e) {
   }
 
   const out = new Uint8ClampedArray(w * h * 4);
+  const REPORT_EVERY = Math.max(1, Math.floor(h / 40)); // ~40 progress updates
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -88,7 +88,13 @@ self.onmessage = function (e) {
         out[idx+3] = 255;
       }
     }
+
+    // Report progress every N rows
+    if (y % REPORT_EVERY === 0) {
+      const pct = Math.round((y / h) * 100);
+      self.postMessage({ type: "progress", pct, label: "Applying bokeh kernel…" });
+    }
   }
 
-  self.postMessage({ out }, [out.buffer]);
+  self.postMessage({ type: "result", out }, [out.buffer]);
 };
