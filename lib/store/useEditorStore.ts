@@ -16,6 +16,8 @@ export type ApertureShape =
   | "star"
   | "anamorphic";
 
+export type RenderEngine = "bokehme" | "wasm" | "worker";
+
 export const APERTURE_SHAPES: { id: ApertureShape; label: string; blades: number }[] = [
   { id: "circle",    label: "Circle",    blades: 0  },
   { id: "hex",       label: "Hexagon",   blades: 6  },
@@ -60,6 +62,7 @@ interface EditorState {
   engineStatus:  EngineStatus;
   renderProgress: number;
   isWebGPU:      boolean;
+  renderEngine:  RenderEngine;
 
   // Focus point picking
   isFocusPicking: boolean;
@@ -88,6 +91,7 @@ interface EditorState {
   setViewMode:     (mode: ViewMode) => void;
   setEngineStatus: (status: EngineStatus, progress?: number) => void;
   setIsWebGPU:     (v: boolean) => void;
+  setRenderEngine: (engine: RenderEngine) => void;
   setFocusPicking: (v: boolean) => void;
   setFocusPoint:   (pt: { x: number; y: number } | null) => void;
   setFocusFromDepth:(depth: number) => void;
@@ -125,6 +129,7 @@ export const useEditorStore = create<EditorState>()(
     engineStatus:  "idle",
     renderProgress: 0,
     isWebGPU:      false,
+    renderEngine:  "wasm",
 
     isFocusPicking: false,
     focusPoint:     null,
@@ -176,6 +181,7 @@ export const useEditorStore = create<EditorState>()(
     setViewMode:     (viewMode)  => set({ viewMode }),
     setEngineStatus: (engineStatus, renderProgress = 0) => set({ engineStatus, renderProgress }),
     setIsWebGPU:     (isWebGPU) => set({ isWebGPU }),
+    setRenderEngine: (renderEngine) => set({ renderEngine }),
 
     setFocusPicking: (isFocusPicking) => set({ isFocusPicking }),
     setFocusPoint:   (focusPoint) => set({ focusPoint }),

@@ -5,13 +5,14 @@ import { renderBokeh } from "@/lib/depth/depthApi";
 import { Loader2 } from "lucide-react";
 
 export function Viewport() {
-  const canvasRef      = useRef<HTMLCanvasElement>(null);
-  const depthCanvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef   = useRef<HTMLDivElement>(null);
-  const renderingRef   = useRef(false);
-  const pendingRef     = useRef(false);
+  const canvasRef       = useRef<HTMLCanvasElement>(null);
+  const depthCanvasRef  = useRef<HTMLCanvasElement>(null);
+  const containerRef    = useRef<HTMLDivElement>(null);
+  const renderingRef    = useRef(false);
+  const pendingRef      = useRef(false);
   const latestParamsRef = useRef<string>("");
-  const workerRef      = useRef<Worker | null>(null);
+  const jsWorkerRef     = useRef<Worker | null>(null);   // shape JS worker
+  const wasmWorkerRef   = useRef<Worker | null>(null);   // Rust/WASM worker
 
   const {
     params, colorImage, depthImage,
@@ -20,110 +21,152 @@ export function Viewport() {
     isFocusPicking, setFocusFromDepth, setFocusPoint,
     isBrushActive, brushRadius, addBrushStroke,
     imageWidth, imageHeight,
+    renderEngine,
   } = useEditorStore();
 
-  const [scale, setScale]   = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [scale, setScale]     = useState(1);
+  const [offset, setOffset]   = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart]   = useState({ x: 0, y: 0 });
-  const [zoom, setZoom]     = useState(1);
-  const [renderMode, setRenderMode] = useState<"bokehme" | "cpu">("bokehme");
-  const [renderTime, setRenderTime] = useState<number | null>(null);
+  const [zoom, setZoom]       = useState(1);
+  const [activeLabel, setActiveLabel] = useState("⬡ BokehMe");
+  const [renderTime, setRenderTime]   = useState<number | null>(null);
 
-  // Keep one persistent worker alive for the lifetime of the component
+  // Spawn persistent workers
   useEffect(() => {
-    workerRef.current = new Worker("/bokeh-worker.js");
-    return () => { workerRef.current?.terminate(); workerRef.current = null; };
+    jsWorkerRef.current   = new Worker("/bokeh-worker.js");
+    wasmWorkerRef.current = new Worker("/bokeh-wasm-worker.js", { type: "module" });
+    return () => {
+      jsWorkerRef.current?.terminate();
+      wasmWorkerRef.current?.terminate();
+    };
   }, []);
 
-  // ── Worker-based shape render ─────────────────────────────────
-  const renderWithWorker = useCallback((
+  // ── Helper: draw a worker result ─────────────────────────────
+  const drawResult = useCallback((
+    canvas: HTMLCanvasElement,
+    out: Uint8ClampedArray,
+    w: number,
+    h: number,
+    label: string,
+    t0: number,
+    paramsKey: string,
+    retry: () => void,
+  ) => {
+    if (latestParamsRef.current !== paramsKey) {
+      renderingRef.current = false;
+      if (pendingRef.current) { pendingRef.current = false; retry(); }
+      return;
+    }
+    canvas.width = w; canvas.height = h;
+    canvas.getContext("2d")?.putImageData(new ImageData(out, w, h), 0, 0);
+    setActiveLabel(label);
+    setRenderTime(Date.now() - t0);
+    setEngineStatus("ready");
+    renderingRef.current = false;
+    if (pendingRef.current) { pendingRef.current = false; retry(); }
+  }, [setEngineStatus]);
+
+  // ── WASM worker render ────────────────────────────────────────
+  const renderWithWasm = useCallback((
     canvas: HTMLCanvasElement,
     color: ImageData,
     depth: ImageData,
     p: typeof params,
-    paramsKey: string
+    paramsKey: string,
+    retry: () => void,
   ) => {
-    const worker = workerRef.current;
+    const worker = wasmWorkerRef.current;
     if (!worker) return;
+    const t0 = Date.now();
 
-    // Terminate any previous job by recreating worker
     worker.onmessage = (e: MessageEvent) => {
-      // Stale result — a newer render was queued
-      if (latestParamsRef.current !== paramsKey) {
-        renderingRef.current = false;
-        if (pendingRef.current) {
-          pendingRef.current = false;
-          // trigger next render on next tick
-          setTimeout(() => useEditorStore.getState() && renderTick(), 0);
-        }
+      const { type, out, message } = e.data;
+      if (type === "error") {
+        console.warn("WASM worker error:", message, "— falling back to JS worker");
+        renderWithJsWorker(canvas, color, depth, p, paramsKey, retry);
         return;
       }
-
-      const { out } = e.data as { out: Uint8ClampedArray };
-      canvas.width  = color.width;
-      canvas.height = color.height;
-      const ctx = canvas.getContext("2d");
-      if (ctx) ctx.putImageData(new ImageData(out, color.width, color.height), 0, 0);
-
-      setRenderMode("cpu");
-      setEngineStatus("ready");
-      renderingRef.current = false;
-
-      if (pendingRef.current) {
-        pendingRef.current = false;
-        setTimeout(() => renderTick(), 0);
-      }
+      drawResult(canvas, out as Uint8ClampedArray, color.width, color.height, "⚡ Rust/WASM", t0, paramsKey, retry);
     };
 
-    // Transfer a copy of pixel data so the main thread stays responsive
-    const srcCopy = new Uint8ClampedArray(color.data);
-    const depCopy = new Uint8ClampedArray(depth.data);
+    // Single-channel depth array (R channel only)
+    const rgba = new Uint8ClampedArray(color.data);
+    const dep  = new Uint8Array(color.width * color.height);
+    for (let i = 0; i < dep.length; i++) dep[i] = depth.data[i * 4];
 
     worker.postMessage(
-      { src: srcCopy, dep: depCopy, width: color.width, height: color.height, params: p },
-      [srcCopy.buffer, depCopy.buffer]
+      { rgba, depth: dep, width: color.width, height: color.height, params: p, paramsKey },
+      [rgba.buffer, dep.buffer],
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [drawResult]);
 
-  // placeholder so the closure inside renderWithWorker can reference it
-  function renderTick() { /* filled below */ }
+  // ── JS shape worker render ────────────────────────────────────
+  const renderWithJsWorker = useCallback((
+    canvas: HTMLCanvasElement,
+    color: ImageData,
+    depth: ImageData,
+    p: typeof params,
+    paramsKey: string,
+    retry: () => void,
+  ) => {
+    const worker = jsWorkerRef.current;
+    if (!worker) return;
+    const t0 = Date.now();
+
+    worker.onmessage = (e: MessageEvent) => {
+      const { out } = e.data as { out: Uint8ClampedArray };
+      drawResult(canvas, out, color.width, color.height, "🔧 JS Worker", t0, paramsKey, retry);
+    };
+
+    const src = new Uint8ClampedArray(color.data);
+    const dep = new Uint8ClampedArray(depth.data);
+    worker.postMessage(
+      { src, dep, width: color.width, height: color.height, params: p },
+      [src.buffer, dep.buffer],
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawResult]);
 
   // ── Main render coordinator ───────────────────────────────────
-  const renderWithBokehMe = useCallback(async () => {
+  const triggerRender = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas || !colorImage || !depthImage) return;
     if (renderingRef.current) { pendingRef.current = true; return; }
 
-    const paramsKey = JSON.stringify(params);
+    const paramsKey = JSON.stringify({ params, renderEngine });
     latestParamsRef.current = paramsKey;
-    renderingRef.current = true;
+    renderingRef.current    = true;
     setEngineStatus("rendering");
 
-    const t0 = Date.now();
+    const retry = () => triggerRender();
 
-    // Non-circle shapes → worker (off-thread, non-blocking)
-    const needsShape = params.apertureShape !== 0 || params.anamorphic > 1.1;
-    if (needsShape) {
-      renderWithWorker(canvas, colorImage, depthImage, params, paramsKey);
-      return; // worker callback handles cleanup
+    // ── WASM (Rust) engine ──────────────────────────────────────
+    if (renderEngine === "wasm") {
+      renderWithWasm(canvas, colorImage, depthImage, params, paramsKey, retry);
+      return;
     }
 
-    // Circle → BokehMe server
-    try {
-      const bokehParams = {
-        K:           params.aperture * 0.8,
-        disp_focus:  params.focalDistance,
-        gamma:       Math.max(1, Math.min(5, params.bokehBoost * 1.2 + 1)),
-        highlight:   params.bokehBoost > 0.5,
-      };
+    // ── JS shape worker (all aperture shapes) ──────────────────
+    if (renderEngine === "worker") {
+      renderWithJsWorker(canvas, colorImage, depthImage, params, paramsKey, retry);
+      return;
+    }
 
-      const result = await renderBokeh(colorImage, depthImage, bokehParams);
+    // ── BokehMe AI server (circle only, falls back to WASM) ────
+    const t0 = Date.now();
+    try {
+      const result = await renderBokeh(colorImage, depthImage, {
+        K:          params.aperture * 0.8,
+        disp_focus: params.focalDistance,
+        gamma:      Math.max(1, Math.min(5, params.bokehBoost * 1.2 + 1)),
+        highlight:  params.bokehBoost > 0.5,
+      });
 
       if (latestParamsRef.current !== paramsKey) {
         renderingRef.current = false;
-        if (pendingRef.current) { pendingRef.current = false; renderWithBokehMe(); }
+        if (pendingRef.current) { pendingRef.current = false; retry(); }
         return;
       }
 
@@ -131,22 +174,20 @@ export function Viewport() {
         canvas.width  = result.width;
         canvas.height = result.height;
         canvas.getContext("2d")!.putImageData(result, 0, 0);
-        setRenderMode("bokehme");
+        setActiveLabel("⬡ BokehMe");
         setRenderTime(Date.now() - t0);
+        setEngineStatus("ready");
+        renderingRef.current = false;
+        if (pendingRef.current) { pendingRef.current = false; retry(); }
       } else {
-        renderWithWorker(canvas, colorImage, depthImage, params, paramsKey);
-        return;
+        // Server not running — fall through to WASM
+        renderWithWasm(canvas, colorImage, depthImage, params, paramsKey, retry);
       }
     } catch {
-      renderWithWorker(canvas, colorImage, depthImage, params, paramsKey);
-      return;
+      renderWithWasm(canvas, colorImage, depthImage, params, paramsKey, retry);
     }
-
-    setEngineStatus("ready");
-    renderingRef.current = false;
-    if (pendingRef.current) { pendingRef.current = false; renderWithBokehMe(); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colorImage, depthImage, params, renderWithWorker]);
+  }, [colorImage, depthImage, params, renderEngine, renderWithWasm, renderWithJsWorker]);
 
   // ── Depth visualization ───────────────────────────────────────
   const renderDepthCanvas = useCallback(() => {
@@ -159,7 +200,7 @@ export function Viewport() {
     const out = new Uint8ClampedArray(w * h * 4);
     const fd = params.focalDistance, fr = params.focalRange;
     for (let i = 0; i < w * h; i++) {
-      const d = data[i*4] / 255;
+      const d = data[i * 4] / 255;
       const [r, g, b] = turbo(d);
       const inFocus = Math.abs(d - fd) <= fr;
       out[i*4]   = inFocus ? Math.min(255, r + 30) : Math.round(r * 0.75);
@@ -168,15 +209,10 @@ export function Viewport() {
       out[i*4+3] = 255;
     }
     ctx.putImageData(new ImageData(out, w, h), 0, 0);
-    // Focus zone overlay
     ctx.fillStyle = "rgba(74,255,136,0.12)";
-    for (let y = 0; y < h; y += 2) {
-      for (let x = 0; x < w; x += 2) {
-        const d = data[(y*w+x)*4] / 255;
-        if (Math.abs(d - fd) <= fr * 0.6) ctx.fillRect(x, y, 2, 2);
-      }
-    }
-    // Legend
+    for (let y = 0; y < h; y += 2)
+      for (let x = 0; x < w; x += 2)
+        if (Math.abs(data[(y*w+x)*4]/255 - fd) <= fr * 0.6) ctx.fillRect(x, y, 2, 2);
     const lgH = Math.floor(h * 0.5), lgY = Math.floor(h * 0.25), lgX = w - 14;
     ctx.fillStyle = "rgba(0,0,0,0.5)";
     ctx.fillRect(lgX - 3, lgY - 16, 18, lgH + 32);
@@ -191,12 +227,12 @@ export function Viewport() {
     ctx.fillText("F", lgX, lgY + lgH + 10);
   }, [depthImage, params.focalDistance, params.focalRange]);
 
-  // Trigger renders when data/params change
+  // Re-render on any param/image/engine change
   useEffect(() => {
     if (!colorImage || !depthImage) return;
-    renderWithBokehMe();
+    triggerRender();
     renderDepthCanvas();
-  }, [colorImage, depthImage, params, renderWithBokehMe, renderDepthCanvas]);
+  }, [colorImage, depthImage, params, renderEngine, triggerRender, renderDepthCanvas]);
 
   useEffect(() => {
     useEditorStore.getState().setIsWebGPU(false);
@@ -204,14 +240,14 @@ export function Viewport() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fit to container
+  // Fit image to container
   useEffect(() => {
     function updateScale() {
       if (!containerRef.current || !imageWidth || !imageHeight) return;
       setScale(Math.min(
         (containerRef.current.clientWidth  - 40) / imageWidth,
         (containerRef.current.clientHeight - 40) / imageHeight,
-        1
+        1,
       ));
     }
     updateScale();
@@ -220,6 +256,7 @@ export function Viewport() {
     return () => ro.disconnect();
   }, [imageWidth, imageHeight]);
 
+  // ── Interaction handlers ──────────────────────────────────────
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (isFocusPicking) { handleFocusPick(e); return; }
     if (isBrushActive)  { handleBrushPaint(e); return; }
@@ -234,8 +271,8 @@ export function Viewport() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isDragging, dragStart, isBrushActive]);
 
-  const handleMouseUp   = useCallback(() => setIsDragging(false), []);
-  const handleWheel     = useCallback((e: React.WheelEvent) => {
+  const handleMouseUp = useCallback(() => setIsDragging(false), []);
+  const handleWheel   = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
     setZoom(z => Math.max(0.1, Math.min(5, z * (e.deltaY > 0 ? 0.9 : 1.1))));
   }, []);
@@ -246,7 +283,7 @@ export function Viewport() {
     const rect = canvas.getBoundingClientRect();
     return {
       normalizedX: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-      normalizedY: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+      normalizedY: Math.max(0, Math.min(1, (e.clientY - rect.top)  / rect.height)),
     };
   }
 
@@ -255,8 +292,7 @@ export function Viewport() {
     const { normalizedX, normalizedY } = getImageCoords(e);
     const px = Math.floor(normalizedX * depthImage.width);
     const py = Math.floor(normalizedY * depthImage.height);
-    const depthVal = depthImage.data[(py * depthImage.width + px) * 4] / 255;
-    setFocusFromDepth(depthVal);
+    setFocusFromDepth(depthImage.data[(py * depthImage.width + px) * 4] / 255);
     setFocusPoint({ x: normalizedX, y: normalizedY });
   }
 
@@ -265,9 +301,9 @@ export function Viewport() {
     addBrushStroke({ x: normalizedX, y: normalizedY, radius: brushRadius, depth: 0, mode: "focus" });
   }
 
-  const hasImage   = !!(colorImage && depthImage);
-  const displayW   = imageWidth  * scale * zoom;
-  const displayH   = imageHeight * scale * zoom;
+  const hasImage    = !!(colorImage && depthImage);
+  const displayW    = imageWidth  * scale * zoom;
+  const displayH    = imageHeight * scale * zoom;
   const isRendering = engineStatus === "rendering";
 
   return (
@@ -301,7 +337,6 @@ export function Viewport() {
           transform: `translate(${offset.x}px, ${offset.y}px)`,
           boxShadow: "0 8px 40px rgba(0,0,0,0.7)",
         }}>
-
           {/* Bokeh result canvas */}
           <canvas ref={canvasRef} style={{
             width:"100%", height:"100%", display:"block",
@@ -310,37 +345,29 @@ export function Viewport() {
             transition: "opacity 0.2s",
           }} />
 
-          {/* Depth overlay on result */}
+          {/* Depth overlay */}
           {viewMode === "result" && depthOverlayOpacity > 0 && (
             <canvas ref={depthCanvasRef} style={{
               width:"100%", height:"100%", display:"block",
               position:"absolute", inset:0,
-              opacity: depthOverlayOpacity,
-              mixBlendMode: "screen",
-              pointerEvents: "none",
+              opacity: depthOverlayOpacity, mixBlendMode:"screen", pointerEvents:"none",
             }} />
           )}
 
           {/* Depth full view */}
           {viewMode === "depth" && (
-            <canvas ref={depthCanvasRef} style={{
-              width:"100%", height:"100%", display:"block",
-              position:"absolute", inset:0,
-            }} />
+            <canvas ref={depthCanvasRef} style={{ width:"100%", height:"100%", display:"block", position:"absolute", inset:0 }} />
           )}
 
           {/* Split view */}
           {viewMode === "split" && (
             <div style={{ position:"absolute", inset:0, pointerEvents:"none" }}>
-              <div style={{
-                position:"absolute", left:0, top:0, width:"50%", height:"100%",
-                overflow:"hidden",
-              }}>
+              <div style={{ position:"absolute", left:0, top:0, width:"50%", height:"100%", overflow:"hidden" }}>
                 <canvas ref={depthCanvasRef} style={{ width: displayW, height:"100%", position:"absolute", left:0, top:0 }} />
               </div>
               <div style={{ position:"absolute", left:"50%", top:0, bottom:0, width:2, background:"rgba(255,255,255,0.25)" }} />
-              <div style={{ position:"absolute", left:8,  top:8, fontSize:10, color:"rgba(255,255,255,0.6)", background:"rgba(0,0,0,0.5)", padding:"2px 6px", borderRadius:3 }}>Depth Map</div>
-              <div style={{ position:"absolute", right:8, top:8, fontSize:10, color:"rgba(255,255,255,0.6)", background:"rgba(0,0,0,0.5)", padding:"2px 6px", borderRadius:3 }}>BokehMe Result</div>
+              <div style={{ position:"absolute", left:8,  top:8, fontSize:10, color:"rgba(255,255,255,0.6)", background:"rgba(0,0,0,0.5)", padding:"2px 6px", borderRadius:3 }}>Depth</div>
+              <div style={{ position:"absolute", right:8, top:8, fontSize:10, color:"rgba(255,255,255,0.6)", background:"rgba(0,0,0,0.5)", padding:"2px 6px", borderRadius:3 }}>Bokeh</div>
             </div>
           )}
 
@@ -354,7 +381,7 @@ export function Viewport() {
         </div>
       )}
 
-      {/* Rendering indicator */}
+      {/* Rendering spinner */}
       {isRendering && (
         <div style={{
           position:"absolute", top:12, right:60,
@@ -365,7 +392,7 @@ export function Viewport() {
         }}>
           <Loader2 size={13} style={{ animation:"spin 1s linear infinite" }} />
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-          BokehMe rendering…
+          rendering…
         </div>
       )}
 
@@ -374,13 +401,11 @@ export function Viewport() {
         position:"absolute", bottom:12, left:12,
         background:"rgba(0,0,0,0.5)", border:"1px solid #222",
         borderRadius:4, padding:"2px 8px", fontSize:10,
-        color: renderMode === "bokehme" ? "#4a9eff" : "#666",
+        color: activeLabel.startsWith("⬡") ? "#4a9eff" : activeLabel.startsWith("⚡") ? "#4aff88" : "#888",
         display:"flex", alignItems:"center", gap:5,
       }}>
-        {renderMode === "bokehme" ? "⬡ BokehMe" : "CPU fallback"}
-        {renderTime && !isRendering && (
-          <span style={{ color:"#444" }}>{renderTime}ms</span>
-        )}
+        {activeLabel}
+        {renderTime != null && !isRendering && <span style={{ color:"#444" }}>{renderTime}ms</span>}
       </div>
 
       {hasImage && (
@@ -397,7 +422,7 @@ function FocusPointOverlay() {
   if (!focusPoint) return null;
   return (
     <div style={{ position:"absolute", left:`${focusPoint.x*100}%`, top:`${focusPoint.y*100}%`, transform:"translate(-50%,-50%)", pointerEvents:"none" }}>
-      <div style={{ width:28, height:28, borderRadius:"50%", border:"2px solid #4aff88", boxShadow:"0 0 0 1px rgba(0,0,0,0.5), 0 0 8px rgba(74,255,136,0.5)" }} />
+      <div style={{ width:28, height:28, borderRadius:"50%", border:"2px solid #4aff88", boxShadow:"0 0 0 1px rgba(0,0,0,0.5),0 0 8px rgba(74,255,136,0.5)" }} />
       <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", width:4, height:4, borderRadius:"50%", background:"#4aff88" }} />
     </div>
   );
