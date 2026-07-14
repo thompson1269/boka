@@ -11,6 +11,7 @@ export function Viewport() {
   const renderingRef   = useRef(false);
   const pendingRef     = useRef(false);
   const latestParamsRef = useRef<string>("");
+  const workerRef      = useRef<Worker | null>(null);
 
   const {
     params, colorImage, depthImage,
@@ -29,7 +30,67 @@ export function Viewport() {
   const [renderMode, setRenderMode] = useState<"bokehme" | "cpu">("bokehme");
   const [renderTime, setRenderTime] = useState<number | null>(null);
 
-  // ── BokehMe render ────────────────────────────────────────────
+  // Keep one persistent worker alive for the lifetime of the component
+  useEffect(() => {
+    workerRef.current = new Worker("/bokeh-worker.js");
+    return () => { workerRef.current?.terminate(); workerRef.current = null; };
+  }, []);
+
+  // ── Worker-based shape render ─────────────────────────────────
+  const renderWithWorker = useCallback((
+    canvas: HTMLCanvasElement,
+    color: ImageData,
+    depth: ImageData,
+    p: typeof params,
+    paramsKey: string
+  ) => {
+    const worker = workerRef.current;
+    if (!worker) return;
+
+    // Terminate any previous job by recreating worker
+    worker.onmessage = (e: MessageEvent) => {
+      // Stale result — a newer render was queued
+      if (latestParamsRef.current !== paramsKey) {
+        renderingRef.current = false;
+        if (pendingRef.current) {
+          pendingRef.current = false;
+          // trigger next render on next tick
+          setTimeout(() => useEditorStore.getState() && renderTick(), 0);
+        }
+        return;
+      }
+
+      const { out } = e.data as { out: Uint8ClampedArray };
+      canvas.width  = color.width;
+      canvas.height = color.height;
+      const ctx = canvas.getContext("2d");
+      if (ctx) ctx.putImageData(new ImageData(out, color.width, color.height), 0, 0);
+
+      setRenderMode("cpu");
+      setEngineStatus("ready");
+      renderingRef.current = false;
+
+      if (pendingRef.current) {
+        pendingRef.current = false;
+        setTimeout(() => renderTick(), 0);
+      }
+    };
+
+    // Transfer a copy of pixel data so the main thread stays responsive
+    const srcCopy = new Uint8ClampedArray(color.data);
+    const depCopy = new Uint8ClampedArray(depth.data);
+
+    worker.postMessage(
+      { src: srcCopy, dep: depCopy, width: color.width, height: color.height, params: p },
+      [srcCopy.buffer, depCopy.buffer]
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // placeholder so the closure inside renderWithWorker can reference it
+  function renderTick() { /* filled below */ }
+
+  // ── Main render coordinator ───────────────────────────────────
   const renderWithBokehMe = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas || !colorImage || !depthImage) return;
@@ -41,54 +102,51 @@ export function Viewport() {
     setEngineStatus("rendering");
 
     const t0 = Date.now();
+
+    // Non-circle shapes → worker (off-thread, non-blocking)
+    const needsShape = params.apertureShape !== 0 || params.anamorphic > 1.1;
+    if (needsShape) {
+      renderWithWorker(canvas, colorImage, depthImage, params, paramsKey);
+      return; // worker callback handles cleanup
+    }
+
+    // Circle → BokehMe server
     try {
-      // Non-circle aperture shapes can't be done by BokehMe (circular only).
-      // Route them straight to the shape-aware CPU renderer.
-      const needsShape = params.apertureShape !== 0 || params.anamorphic > 1.1;
+      const bokehParams = {
+        K:           params.aperture * 0.8,
+        disp_focus:  params.focalDistance,
+        gamma:       Math.max(1, Math.min(5, params.bokehBoost * 1.2 + 1)),
+        highlight:   params.bokehBoost > 0.5,
+      };
 
-      if (needsShape) {
-        cpuRender(canvas, colorImage, depthImage, params);
-        setRenderMode("cpu");
-      } else {
-        // Map UI params → BokehMe params
-        const bokehParams = {
-          K:           params.aperture * 0.8,
-          disp_focus:  params.focalDistance,
-          gamma:       Math.max(1, Math.min(5, params.bokehBoost * 1.2 + 1)),
-          highlight:   params.bokehBoost > 0.5,
-        };
+      const result = await renderBokeh(colorImage, depthImage, bokehParams);
 
-        const result = await renderBokeh(colorImage, depthImage, bokehParams);
-
-        // If a newer render was requested while we waited, skip drawing
-        if (latestParamsRef.current !== paramsKey) {
-          renderingRef.current = false;
-          if (pendingRef.current) { pendingRef.current = false; renderWithBokehMe(); }
-          return;
-        }
-
-        if (result) {
-          canvas.width  = result.width;
-          canvas.height = result.height;
-          canvas.getContext("2d")!.putImageData(result, 0, 0);
-          setRenderMode("bokehme");
-          setRenderTime(Date.now() - t0);
-        } else {
-          cpuRender(canvas, colorImage, depthImage, params);
-          setRenderMode("cpu");
-        }
+      if (latestParamsRef.current !== paramsKey) {
+        renderingRef.current = false;
+        if (pendingRef.current) { pendingRef.current = false; renderWithBokehMe(); }
+        return;
       }
-    } catch (e) {
-      console.error("BokehMe error:", e);
-      cpuRender(canvas, colorImage, depthImage, params);
-      setRenderMode("cpu");
+
+      if (result) {
+        canvas.width  = result.width;
+        canvas.height = result.height;
+        canvas.getContext("2d")!.putImageData(result, 0, 0);
+        setRenderMode("bokehme");
+        setRenderTime(Date.now() - t0);
+      } else {
+        renderWithWorker(canvas, colorImage, depthImage, params, paramsKey);
+        return;
+      }
+    } catch {
+      renderWithWorker(canvas, colorImage, depthImage, params, paramsKey);
+      return;
     }
 
     setEngineStatus("ready");
     renderingRef.current = false;
     if (pendingRef.current) { pendingRef.current = false; renderWithBokehMe(); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [colorImage, depthImage, params]);
+  }, [colorImage, depthImage, params, renderWithWorker]);
 
   // ── Depth visualization ───────────────────────────────────────
   const renderDepthCanvas = useCallback(() => {
@@ -343,99 +401,6 @@ function FocusPointOverlay() {
       <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", width:4, height:4, borderRadius:"50%", background:"#4aff88" }} />
     </div>
   );
-}
-
-// CPU fallback renderer — supports all aperture shapes
-function cpuRender(canvas: HTMLCanvasElement, colorImage: ImageData, depthImage: ImageData, params: ReturnType<typeof useEditorStore.getState>["params"]) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const { width: w, height: h, data: src } = colorImage;
-  const dep = depthImage.data;
-  canvas.width = w; canvas.height = h;
-  const out   = new Uint8ClampedArray(w * h * 4);
-  const fd    = params.focalDistance;
-  const fr    = params.focalRange;
-  const maxR  = params.aperture;
-  const boost = params.bokehBoost;
-  const blades     = params.apertureShape;   // 0=circle, 5=penta, 6=hex, 8=oct, 10=star
-  const rot        = (params.bladeRotation * Math.PI) / 180;
-  const anamorphic = Math.max(1, params.anamorphic ?? 1.0);
-  const TAU        = Math.PI * 2;
-
-  // Returns true if normalised point (px,py) is inside the aperture
-  function insideAperture(px: number, py: number): boolean {
-    const r = Math.sqrt(px * px + py * py);
-    if (r < 0.0001) return true;
-
-    if (blades < 3) {
-      // Circle
-      return r <= 1.0;
-    }
-    if (blades >= 9.5 && blades <= 10.5) {
-      // 5-point star: outer=1.0, inner=0.45
-      const angle    = Math.atan2(py, px) + rot;
-      const sector   = TAU / 10;
-      const local    = ((angle % sector) + sector) % sector;
-      const half     = sector * 0.5;
-      const t        = Math.abs(local - half) / half;
-      const starR    = 0.45 + 0.55 * t;
-      return r <= starR;
-    }
-    // Regular N-gon (pentagon=5, hex=6, octagon=8)
-    const angle   = Math.atan2(py, px) + rot;
-    const sector  = TAU / blades;
-    const local   = ((angle % sector) + sector) % sector;
-    const delta   = local - sector * 0.5;
-    const apothem = Math.cos(Math.PI / blades);
-    const polyR   = apothem / Math.cos(delta);
-    return r <= polyR;
-  }
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx   = (y * w + x) * 4;
-      const depth = dep[idx] / 255;
-      const coc   = Math.min(
-        (maxR * Math.max(0, Math.abs(depth - fd) - fr)) / Math.max(depth, 0.001),
-        maxR
-      );
-
-      if (coc < 0.5 || maxR === 0) {
-        out[idx]=src[idx]; out[idx+1]=src[idx+1]; out[idx+2]=src[idx+2]; out[idx+3]=255;
-        continue;
-      }
-
-      const r    = Math.round(coc * 0.5);
-      const step = Math.max(1, Math.floor(r / 6));
-      let rS=0, gS=0, bS=0, wS=0;
-
-      for (let dy = -r; dy <= r; dy += step) {
-        for (let dx = -r; dx <= r; dx += step) {
-          // Normalise to unit disk, apply anamorphic squeeze on X
-          const nx = (dx / r) / anamorphic;
-          const ny = dy / r;
-          if (!insideAperture(nx, ny)) continue;
-
-          const sx = Math.min(w-1, Math.max(0, x + dx));
-          const sy = Math.min(h-1, Math.max(0, y + dy));
-          const si = (sy * w + sx) * 4;
-          const lum = (src[si]*0.299 + src[si+1]*0.587 + src[si+2]*0.114) / 255;
-          const w2  = 1 + Math.max(0, lum - 0.8) * boost * 3;
-          rS += src[si]   * w2;
-          gS += src[si+1] * w2;
-          bS += src[si+2] * w2;
-          wS += w2;
-        }
-      }
-
-      if (wS > 0) {
-        out[idx]=rS/wS; out[idx+1]=gS/wS; out[idx+2]=bS/wS; out[idx+3]=255;
-      } else {
-        out[idx]=src[idx]; out[idx+1]=src[idx+1]; out[idx+2]=src[idx+2]; out[idx+3]=255;
-      }
-    }
-  }
-  ctx.putImageData(new ImageData(out, w, h), 0, 0);
 }
 
 function turbo(t: number): [number, number, number] {
