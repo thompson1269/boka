@@ -256,7 +256,7 @@ export class BokehEngine {
     destroyIfExists(this.finalOutput);
 
     const texDesc = (format: GPUTextureFormat, usage: GPUTextureUsageFlags) => ({
-      size: [w, h, 1] as GPUExtent3DDict,
+      size: { width: w, height: h, depthOrArrayLayers: 1 } as GPUExtent3DDict,
       format,
       usage,
     });

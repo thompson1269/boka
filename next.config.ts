@@ -1,18 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Allow WebGPU in headers
-  async headers() {
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          { key: "Cross-Origin-Opener-Policy",   value: "same-origin" },
-          { key: "Cross-Origin-Embedder-Policy",  value: "require-corp" },
-        ],
-      },
-    ];
-  },
+  // No COEP header — it blocks cross-origin requests to localhost Python server
 };
 
 export default nextConfig;
