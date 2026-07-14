@@ -2,7 +2,6 @@
 import React, { useRef, useEffect, useCallback, useState } from "react";
 import { useEditorStore } from "@/lib/store/useEditorStore";
 import { renderBokeh } from "@/lib/depth/depthApi";
-import { Loader2 } from "lucide-react";
 
 export function Viewport() {
   const canvasRef       = useRef<HTMLCanvasElement>(null);
@@ -340,10 +339,22 @@ export function Viewport() {
     >
       {/* Empty state */}
       {!hasImage && (
-        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10, pointerEvents:"none", userSelect:"none" }}>
-          <div style={{ fontSize:56, opacity:0.08 }}>⬡</div>
-          <div style={{ fontSize:15, color:"#555", fontWeight:500 }}>Drop an image to begin</div>
-          <div style={{ fontSize:11, color:"#333" }}>JPG · PNG · WEBP — or use Open in the toolbar</div>
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:12, pointerEvents:"none", userSelect:"none" }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: 18,
+            background: "linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(124,58,237,0.08) 100%)",
+            border: "1px solid var(--border)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 32, opacity: 0.5,
+          }}>⬡</div>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 14, color: "var(--text-secondary)", fontWeight: 500, marginBottom: 5 }}>
+              Drop an image to begin
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              JPG · PNG · WEBP — or click Open
+            </div>
+          </div>
         </div>
       )}
 
@@ -401,14 +412,13 @@ export function Viewport() {
       {/* Rendering spinner */}
       {isRendering && (
         <div style={{
-          position:"absolute", top:12, right:60,
-          background:"rgba(0,0,0,0.8)", borderRadius:6,
-          padding:"6px 12px", color:"#4a9eff",
-          display:"flex", alignItems:"center", gap:6, fontSize:11,
-          boxShadow:"0 2px 8px rgba(0,0,0,0.4)",
+          position:"absolute", top:12, right:12,
+          background:"rgba(0,0,0,0.75)", backdropFilter:"blur(6px)",
+          borderRadius:8, padding:"6px 12px", color:"var(--accent-bright)",
+          display:"flex", alignItems:"center", gap:7, fontSize:11,
+          border:"1px solid rgba(59,130,246,0.2)",
         }}>
-          <Loader2 size={13} style={{ animation:"spin 1s linear infinite" }} />
-          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <div style={{ width:12, height:12, borderRadius:"50%", border:"2px solid var(--accent-bright)", borderTopColor:"transparent", animation:"spin 0.7s linear infinite" }} />
           rendering…
         </div>
       )}
@@ -416,13 +426,14 @@ export function Viewport() {
       {/* Engine badge */}
       <div style={{
         position:"absolute", bottom:12, left:12,
-        background:"rgba(0,0,0,0.5)", border:"1px solid #222",
-        borderRadius:4, padding:"2px 8px", fontSize:10,
-        color: activeLabel.startsWith("⬡") ? "#4a9eff" : activeLabel.startsWith("⚡") ? "#4aff88" : "#888",
-        display:"flex", alignItems:"center", gap:5,
+        background:"rgba(0,0,0,0.6)", backdropFilter:"blur(6px)",
+        border:"1px solid rgba(255,255,255,0.07)",
+        borderRadius:6, padding:"3px 9px", fontSize:10,
+        color: activeLabel.startsWith("⚡") ? "var(--success)" : activeLabel.startsWith("✦") ? "var(--accent-bright)" : "var(--text-secondary)",
+        display:"flex", alignItems:"center", gap:5, fontWeight:500,
       }}>
         {activeLabel}
-        {renderTime != null && !isRendering && <span style={{ color:"#444" }}>{renderTime}ms</span>}
+        {renderTime != null && !isRendering && <span style={{ color:"var(--text-muted)", fontWeight:400 }}>{renderTime}ms</span>}
       </div>
 
       {hasImage && (

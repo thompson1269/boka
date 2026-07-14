@@ -4,51 +4,62 @@ import { Clock } from "lucide-react";
 import { useEditorStore } from "@/lib/store/useEditorStore";
 
 export function HistoryPanel() {
-  const { history, historyIndex } = useEditorStore();
+  const { history, historyIndex, undo, redo } = useEditorStore();
   if (history.length === 0) return null;
 
   return (
-    <div style={{
-      width: 160, background: "#1a1a1a",
-      borderRight: "1px solid #2a2a2a",
+    <aside style={{
+      width: 156, minWidth: 156,
+      background: "var(--bg-panel)",
+      borderRight: "1px solid var(--border-soft)",
       display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
       <div style={{
-        display: "flex", alignItems: "center", gap: 5,
-        padding: "10px 12px 6px", fontSize: 10, fontWeight: 600,
-        color: "#555", textTransform: "uppercase", letterSpacing: "0.8px",
-        borderBottom: "1px solid #2a2a2a", flexShrink: 0,
+        display: "flex", alignItems: "center", gap: 6,
+        padding: "11px 12px 9px",
+        fontSize: 10, fontWeight: 600, color: "var(--text-muted)",
+        textTransform: "uppercase", letterSpacing: "0.7px",
+        borderBottom: "1px solid var(--border-soft)", flexShrink: 0,
       }}>
-        <Clock size={11} />
+        <Clock size={10} />
         <span>History</span>
       </div>
-      <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "3px 0" }}>
         {[...history].reverse().map((entry, i) => {
           const realIndex = history.length - 1 - i;
           const isCurrent = realIndex === historyIndex;
-          const isFuture = realIndex > historyIndex;
+          const isFuture  = realIndex > historyIndex;
           return (
-            <div
+            <button
               key={entry.timestamp}
+              onClick={() => {
+                const diff = realIndex - historyIndex;
+                if (diff < 0) for (let j = 0; j < -diff; j++) undo();
+                else for (let j = 0; j < diff; j++) redo();
+              }}
               style={{
                 display: "flex", justifyContent: "space-between", alignItems: "center",
-                padding: "5px 12px", fontSize: 10,
-                color: isCurrent ? "#e8e8e8" : "#555",
-                background: isCurrent ? "rgba(74,158,255,0.08)" : "transparent",
-                opacity: isFuture ? 0.35 : 1,
-                cursor: "pointer",
+                width: "100%", padding: "6px 12px",
+                background: isCurrent ? "var(--accent-subtle)" : "transparent",
+                border: "none",
+                borderLeft: `2px solid ${isCurrent ? "var(--accent)" : "transparent"}`,
+                color: isCurrent ? "var(--text-primary)" : "var(--text-muted)",
+                opacity: isFuture ? 0.3 : 1,
+                cursor: "pointer", textAlign: "left",
+                transition: "all 0.1s",
+                fontSize: 11,
               }}
             >
               <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {entry.label}
               </span>
-              <span style={{ color: "#444", fontSize: 9, marginLeft: 4 }}>
+              <span style={{ color: "var(--text-muted)", fontSize: 9, marginLeft: 4, flexShrink: 0 }}>
                 {new Date(entry.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
-            </div>
+            </button>
           );
         })}
       </div>
-    </div>
+    </aside>
   );
 }

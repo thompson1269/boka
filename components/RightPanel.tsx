@@ -6,8 +6,8 @@ import { DepthPanel } from "./panels/DepthPanel";
 import { AdvancedPanel } from "./panels/AdvancedPanel";
 
 const tabs = [
-  { id: "lens",     label: "Lens" },
-  { id: "depth",    label: "Depth" },
+  { id: "lens",     label: "Lens"     },
+  { id: "depth",    label: "Depth"    },
   { id: "advanced", label: "Advanced" },
 ] as const;
 
@@ -15,36 +15,44 @@ export function RightPanel() {
   const { activeTab, setActiveTab } = useEditorStore();
 
   return (
-    <div style={{
-      width: 240, minWidth: 240,
-      background: "#1e1e1e", borderLeft: "1px solid #2a2a2a",
+    <aside style={{
+      width: 252, minWidth: 252,
+      background: "var(--bg-panel)",
+      borderLeft: "1px solid var(--border-soft)",
       display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
-      {/* Tabs */}
-      <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a", flexShrink: 0 }}>
-        {tabs.map((tab) => (
+      {/* Tab bar */}
+      <div style={{
+        display: "flex",
+        background: "var(--bg-app)",
+        borderBottom: "1px solid var(--border-soft)",
+        padding: "0 4px",
+        flexShrink: 0,
+      }}>
+        {tabs.map(({ id, label }) => (
           <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            key={id}
+            onClick={() => setActiveTab(id)}
             style={{
-              flex: 1, padding: "10px 4px",
+              flex: 1, padding: "11px 4px",
               background: "transparent", border: "none",
-              borderBottom: `2px solid ${activeTab === tab.id ? "#4a9eff" : "transparent"}`,
-              color: activeTab === tab.id ? "#4a9eff" : "#555",
-              fontSize: 11, fontWeight: 500, cursor: "pointer", transition: "all 0.12s",
+              borderBottom: `2px solid ${activeTab === id ? "var(--accent)" : "transparent"}`,
+              color: activeTab === id ? "var(--text-primary)" : "var(--text-muted)",
+              fontSize: 11, fontWeight: activeTab === id ? 600 : 400,
+              cursor: "pointer", transition: "all 0.12s", letterSpacing: "0.1px",
             }}
           >
-            {tab.label}
+            {label}
           </button>
         ))}
       </div>
 
-      {/* Content */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "12px 14px" }}>
+      {/* Panel content */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "14px 14px" }}>
         {activeTab === "lens"     && <LensPanel />}
         {activeTab === "depth"    && <DepthPanel />}
         {activeTab === "advanced" && <AdvancedPanel />}
       </div>
-    </div>
+    </aside>
   );
 }

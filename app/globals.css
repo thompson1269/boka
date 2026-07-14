@@ -1,44 +1,46 @@
 @import "tailwindcss";
 
 :root {
-  --bg-primary: #1a1a1a;
-  --bg-secondary: #242424;
-  --bg-panel: #2a2a2a;
-  --bg-elevated: #303030;
-  --border: #3a3a3a;
-  --text-primary: #e8e8e8;
-  --text-secondary: #999;
-  --text-muted: #666;
-  --accent: #4a9eff;
-  --accent-hover: #6ab0ff;
-  --accent-subtle: rgba(74, 158, 255, 0.15);
-  --danger: #ff4a4a;
-  --success: #4aff88;
-  --warning: #ffb84a;
+  --bg-app:      #111113;
+  --bg-panel:    #18181b;
+  --bg-surface:  #1f1f23;
+  --bg-elevated: #27272c;
+  --bg-hover:    #2e2e34;
+  --border:      #2e2e34;
+  --border-soft: #252528;
+  --text-primary:   #f0f0f2;
+  --text-secondary: #8b8b96;
+  --text-muted:     #52525c;
+  --accent:         #3b82f6;
+  --accent-bright:  #60a5fa;
+  --accent-subtle:  rgba(59, 130, 246, 0.12);
+  --accent-glow:    rgba(59, 130, 246, 0.25);
+  --success:  #22c55e;
+  --warning:  #f59e0b;
+  --danger:   #ef4444;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
   height: 100%;
   overflow: hidden;
-  background: var(--bg-primary);
+  background: var(--bg-app);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", "SF Pro Text",
+               "Helvetica Neue", sans-serif;
+  font-size: 13px;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* ── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #555; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
 
-/* Range input */
+/* ── Range input ───────────────────────────────────────────── */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -51,41 +53,41 @@ input[type="range"] {
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  background: var(--accent);
+  background: #fff;
+  border: 2px solid var(--accent);
   cursor: pointer;
-  transition: transform 0.1s;
+  transition: transform 0.1s, box-shadow 0.1s;
+  box-shadow: 0 0 0 0 var(--accent-glow);
 }
 input[type="range"]::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
+  transform: scale(1.15);
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.25);
 }
 
-/* Canvas */
+/* ── Canvas ────────────────────────────────────────────────── */
 canvas { display: block; }
 
-/* Animations */
+/* ── Animations ────────────────────────────────────────────── */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fadeIn 0.18s ease forwards; }
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
 }
 
-.fade-in { animation: fadeIn 0.2s ease forwards; }
-
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
-.shimmer {
-  background: linear-gradient(90deg, var(--bg-panel) 25%, var(--bg-elevated) 50%, var(--bg-panel) 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
-}
-
-/* Selection */
-::selection {
-  background: var(--accent-subtle);
-  color: var(--text-primary);
-}
+/* ── Selection ─────────────────────────────────────────────── */
+::selection { background: var(--accent-subtle); color: var(--text-primary); }
