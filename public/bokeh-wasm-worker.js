@@ -53,7 +53,10 @@ self.onmessage = async function (e) {
       components
     );
 
-    self.postMessage({ type: "result", out, paramsKey }, [out.buffer]);
+    // wasm-bindgen returns a JS Uint8Array backed by WASM memory.
+    // Copy it out before the WASM heap can move, then transfer the buffer.
+    const outCopy = new Uint8Array(out);
+    self.postMessage({ type: "result", out: outCopy, paramsKey }, [outCopy.buffer]);
   } catch (err) {
     self.postMessage({ type: "error", message: err.message, paramsKey });
   }

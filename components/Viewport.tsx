@@ -59,7 +59,8 @@ export function Viewport() {
       return;
     }
     canvas.width = w; canvas.height = h;
-    canvas.getContext("2d")?.putImageData(new ImageData(out, w, h), 0, 0);
+    const clamped = out instanceof Uint8ClampedArray ? out : new Uint8ClampedArray(out as unknown as ArrayBuffer);
+    canvas.getContext("2d")?.putImageData(new ImageData(clamped, w, h), 0, 0);
     setActiveLabel(label);
     setRenderTime(Date.now() - t0);
     setEngineStatus("ready");
@@ -87,7 +88,11 @@ export function Viewport() {
         renderWithJsWorker(canvas, color, depth, p, paramsKey, retry);
         return;
       }
-      drawResult(canvas, out as Uint8ClampedArray, color.width, color.height, "⚡ Rust/WASM", t0, paramsKey, retry);
+      // wasm-bindgen returns a plain Uint8Array/Array — coerce to Uint8ClampedArray
+      const clamped = out instanceof Uint8ClampedArray
+        ? out
+        : new Uint8ClampedArray(out as ArrayBuffer | Uint8Array);
+      drawResult(canvas, clamped, color.width, color.height, "⚡ Rust/WASM", t0, paramsKey, retry);
     };
 
     // Single-channel depth array (R channel only)
